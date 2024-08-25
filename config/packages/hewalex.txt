@@ -1,0 +1,145 @@
+mqtt:
+  sensor:
+    - name: "Warmtepomp T1 Omgeving"
+      state_topic: "Heatpump/T1"
+      unit_of_measurement: "°C"
+      device:
+        identifiers: 
+          - "heatpump_hewalex"
+        name: "Warmtepomp Hewalex"
+        
+    - name: "Warmtepomp T2 Vloer uit"
+      state_topic: "Heatpump/T2"
+      unit_of_measurement: "°C"
+      device:
+        identifiers: 
+          - "heatpump_hewalex"
+        name: "Warmtepomp Hewalex"
+        
+    - name: "Warmtepomp T3 Vloer in"
+      state_topic: "Heatpump/T3"
+      unit_of_measurement: "°C"
+      device:
+        identifiers: 
+          - "heatpump_hewalex"
+        name: "Warmtepomp Hewalex"
+    - name: "Warmtepomp T6 Waterpomp in"
+      state_topic: "Heatpump/T6"
+      unit_of_measurement: "°C"
+      device:
+        identifiers: 
+          - "heatpump_hewalex"
+        name: "Warmtepomp Hewalex"
+    - name: "Warmtepomp T7 Warmtepomp uit"
+      state_topic: "Heatpump/T7"
+      unit_of_measurement: "°C"
+      device:
+        identifiers: 
+          - "heatpump_hewalex"
+        name: "Warmtepomp Hewalex"
+    - name: "Warmtepomp T8 Verdamper"
+      state_topic: "Heatpump/T8"
+      unit_of_measurement: "°C"
+      device:
+        identifiers: 
+          - "heatpump_hewalex"
+        name: "Warmtepomp Hewalex"
+    - name: "Warmtepomp T9 voor compr"
+      state_topic: "Heatpump/T9"
+      unit_of_measurement: "°C"
+      device:
+        identifiers: 
+          - "heatpump_hewalex"
+        name: "Warmtepomp Hewalex"
+    - name: "Warmtepomp T10 na compr"
+      state_topic: "Heatpump/T10"
+      unit_of_measurement: "°C"
+      device:
+        identifiers: 
+          - "heatpump_hewalex"
+        name: "Warmtepomp Hewalex"
+    - name: "Warmtepomp Temp instelling"
+      state_topic: "Heatpump/TapWaterTemp"
+      unit_of_measurement: "°C"
+      device:
+        identifiers: 
+          - "heatpump_hewalex"
+        name: "Warmtepomp Hewalex"
+    - name: "Warmtepomp Status"
+      state_topic: "Heatpump/HeatPumpEnabled"
+      value_template: >-
+        {% if value == "true" %}
+             Aan
+        {% else %}
+            Uit
+        {% endif %}
+      device:
+        identifiers: 
+          - "heatpump_hewalex"
+        name: "Warmtepomp Hewalex"
+        
+    - name: "Warmtepomp Hysteresis"
+      state_topic: "Heatpump/TapWaterHysteresis"
+      unit_of_measurement: "°C"
+      device:
+        identifiers: 
+          - "heatpump_hewalex"
+        name: "Warmtepomp Hewalex"
+    - name: "Warmtepomp Waterpomp"
+      state_topic: "Heatpump/CirculationPumpON"
+      value_template: >-
+        {% if value == "true" %}
+             Aan
+        {% else %}
+            Uit
+        {% endif %}
+      device:
+        identifiers: 
+          - "heatpump_hewalex"
+        name: "Warmtepomp Hewalex"
+    - name: "Warmtepomp Ventilator"
+      state_topic: "Heatpump/FanON"
+      value_template: >-
+        {% if value == "true" %}
+             Aan
+        {% else %}
+            Uit
+        {% endif %}
+      device:
+        identifiers: 
+          - "heatpump_hewalex"
+        name: "Warmtepomp Hewalex"
+    - name: "Warmtepomp Expansie klep"
+      state_topic: "Heatpump/EV1"
+      unit_of_measurement: "unit"
+      device:
+        identifiers: 
+          - "heatpump_hewalex"
+        name: "Warmtepomp Hewalex"
+    
+    
+  switch:
+    - name: "Warmtepomp Aan"
+      command_topic: "Heatpump/Command/HeatPumpEnabled"
+      payload_on: "True"
+      payload_off: "False"
+      state_on: "Aan"
+      state_off: "Uit"
+      unique_id: warmtepomp_aan_switch
+      device:
+        identifiers: 
+          - "heatpump_hewalex"
+        name: "Warmtepomp Hewalex"
+        
+  input_number:
+    - name: "Warmtepomp Hyst"
+      state_topic: "Heatpump/TapWaterHysteresis"
+      command_topic: "Heatpump/Command/TapWaterHysteresis"
+      unit_of_measurement: "°C"
+      min: 2
+      max: 10
+      step: 1
+      device:
+        identifiers: 
+          - "heatpump_hewalex"
+        name: "Warmtepomp Hewalex"

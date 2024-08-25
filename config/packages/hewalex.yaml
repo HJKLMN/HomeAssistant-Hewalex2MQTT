@@ -1,0 +1,215 @@
+ mqtt:
+  switch:
+    - name: "Warmtepomp Aan"
+      command_topic: "Heatpump/Command/HeatPumpEnabled"
+      payload_on: "True"
+      payload_off: "False"
+      state_on: "Aan"
+      state_off: "Uit"
+      unique_id: warmtepomp_aan_switch
+      device:
+        identifiers: 
+          - "heatpump_hewalex"
+        name: "Warmtepomp Hewalex" 
+
+  sensor:
+  
+    - name: "Warmtepomp T1 Omgeving"
+      state_topic: "Heatpump/T1"
+      unit_of_measurement: "°C"
+      unique_id: "warmtepomp_t1"
+      device:
+        identifiers: 
+          - "heatpump_hewalex"
+        name: "Warmtepomp Hewalex"
+        
+    - name: "Warmtepomp Aan?"
+      state_topic: "Heatpump/HeatPumpEnabled"
+      unique_id: "warmtepomp_aan"
+      device:
+        identifiers: 
+          - "heatpump_hewalex"
+        name: "Warmtepomp Hewalex"
+    
+    - name: "Warmtepomp T2 Vloer uit"
+      state_topic: "Heatpump/T2"
+      unit_of_measurement: "°C"
+      unique_id: "warmtepomp_t2"
+      device:
+        identifiers: 
+          - "heatpump_hewalex"
+        name: "Warmtepomp Hewalex"
+        
+    - name: "Warmtepomp T3 Vloer in"
+      state_topic: "Heatpump/T3"
+      unit_of_measurement: "°C"
+      unique_id: "warmtepomp_t3"
+      device:
+        identifiers: 
+          - "heatpump_hewalex"
+        name: "Warmtepomp Hewalex"
+        
+    - name: "Warmtepomp T6 Waterpomp in"
+      state_topic: "Heatpump/T6"
+      unit_of_measurement: "°C"
+      unique_id: "warmtepomp_t6"
+      device:
+        identifiers: 
+          - "heatpump_hewalex"
+        name: "Warmtepomp Hewalex"
+        
+    - name: "Warmtepomp T7 Warmtepomp uit"
+      state_topic: "Heatpump/T7"
+      unit_of_measurement: "°C"
+      unique_id: "warmtepomp_t7"
+      device:
+        identifiers: 
+          - "heatpump_hewalex"
+        name: "Warmtepomp Hewalex"
+        
+    - name: "Warmtepomp T8 Verdamper"
+      state_topic: "Heatpump/T8"
+      unit_of_measurement: "°C"
+      unique_id: "warmtepomp_t8"
+      device:
+        identifiers: 
+          - "heatpump_hewalex"
+        name: "Warmtepomp Hewalex"
+        
+    - name: "Warmtepomp T9 voor compr"
+      state_topic: "Heatpump/T9"
+      unit_of_measurement: "°C"
+      unique_id: "warmtepomp_t9"
+      device:
+        identifiers: 
+          - "heatpump_hewalex"
+        name: "Warmtepomp Hewalex"
+        
+    - name: "Warmtepomp T10 na compr"
+      state_topic: "Heatpump/T10"
+      unit_of_measurement: "°C"
+      unique_id: "warmtepomp_t10"
+      device:
+        identifiers: 
+          - "heatpump_hewalex"
+        name: "Warmtepomp Hewalex"
+        
+    - name: "Warmtepomp Temp instelling"
+      state_topic: "Heatpump/TapWaterTemp"
+      unit_of_measurement: "°C"
+      unique_id: "warmtepomp_tapwater"
+      device:
+        identifiers: 
+          - "heatpump_hewalex"
+        name: "Warmtepomp Hewalex"
+        
+    
+    - name: "Warmtepomp Hysteresis"
+      state_topic: "Heatpump/TapWaterHysteresis"
+      unit_of_measurement: "°C"
+      unique_id: "warmtepomp_hysteresis"
+      device:
+        identifiers: 
+          - "heatpump_hewalex"
+        name: "Warmtepomp Hewalex"
+
+    - name: "Warmtepomp Expansie klep"
+      state_topic: "Heatpump/EV1"
+      unit_of_measurement: "unit"
+      unique_id: "warmtepomp_ev1"
+      device:
+        identifiers: 
+          - "heatpump_hewalex"
+        name: "Warmtepomp Hewalex"
+
+  binary_sensor:
+    
+    - name: "Warmtepomp Status"
+      state_topic: "Heatpump/HeatPumpEnabled"
+      unique_id: "warmtepomp_heatpump"
+      payload_on: "True"
+      payload_off: "False"
+      device_class: "running"
+      device:
+        identifiers: 
+            - "heatpump_hewalex"
+        name: "Warmtepomp Hewalex"
+     
+    - name: "Warmtepomp Waterpomp"
+      state_topic: "Heatpump/CirculationPumpON"
+      unique_id: "warmtepomp_waterpomp"
+      payload_on: "True"
+      payload_off: "False"
+      device_class: "running"
+      device:
+        identifiers: 
+            - "heatpump_hewalex"
+        name: "Warmtepomp Hewalex"
+    
+    - name: "Warmtepomp Ventilator"
+      state_topic: "Heatpump/FanON"
+      payload_on: "True"
+      payload_off: "False"
+      unique_id: "warmtepomp_fan"
+      device_class: "running"
+      device:
+        identifiers: 
+            - "heatpump_hewalex"
+        name: "Warmtepomp Hewalex"
+        
+    - name: "Warmtepomp HeaterEON"
+      state_topic: "Heatpump/HeaterEON"
+      payload_on: "True"
+      payload_off: "False"
+      unique_id: "warmtepomp_heater"
+      device_class: "running"
+      device:
+        identifiers: 
+            - "heatpump_hewalex"
+        name: "Warmtepomp Hewalex"
+        
+    - name: "Warmtepomp Compressor"
+      state_topic: "Heatpump/CompressorON"
+      payload_on: "True"
+      payload_off: "False"
+      unique_id: "warmtepomp_compressor"
+      device_class: "running"
+      device:
+        identifiers: 
+            - "heatpump_hewalex"
+        name: "Warmtepomp Hewalex"
+        
+   
+        
+  climate:
+      - name: "Warmtepomp Hewalex Vloer"
+        unique_id: "hewalex_vloertemp"
+        modes:
+            - "heat"
+            - "off"
+        current_temperature_topic: "Heatpump/T2"
+        temperature_command_topic: "Heatpump/Command/TapWaterTemp"
+        initial: "30"
+        min_temp: 15
+        max_temp: 40
+        temp_step: 1
+        temperature_command_template: "{{ value | int }}"
+        power_command_topic: "Heatpump/Command/HeatPumpEnabled"
+        mode_state_topic: "Heatpump/HeatPumpEnabled"
+        mode_command_topic: "Heatpump/Command/HeatPumpEnabled"
+        mode_state_template: "{% if value == 'True' %}Heat On{% else %}Heat Off{% endif %}"
+        mode_command_template: "{% if value == 'heat' %}True{% else %}False{% endif %}"
+        temperature_state_template: "Heatpump/TapWaterSensor"
+        
+      - name: "Hewalex TapWater Hysteresis"
+        unique_id: "hewalex_hysteresis"
+        modes:
+          - "heat"  # Voeg hier de gewenste hysteresisniveaus toe, bijv. "2°C", "5°C", "10°C"
+        current_temperature_topic: "Heatpump/TapWaterHysteresis"  # Huidige hysteresis MQTT-topic
+        temperature_command_topic: "Heatpump/Command/TapWaterHysteresis"  # Hysteresisinstelling MQTT-topic
+        initial: "6"  # Initieel ingestelde hysteresis (bijv. 5°C)
+        min_temp: 2  # Minimale hysteresis (bijv. 2°C)
+        max_temp: 10  # Maximale hysteresis (bijv. 10°C)
+        temp_step: 1  # Stapgrootte voor hysteresisinstelling
+        temperature_command_template: "{{ value | int }}"  # Template voor hysteresisinstelling
+        
