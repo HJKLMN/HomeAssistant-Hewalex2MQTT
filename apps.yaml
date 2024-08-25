@@ -1,0 +1,4 @@
+---
+hewalex2qtt:
+  module: hewalex2mqtt
+  class: Hewalex2MQTT
