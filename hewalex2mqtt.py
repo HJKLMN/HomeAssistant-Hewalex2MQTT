@@ -7,6 +7,8 @@ from hewalex_geco.devices import PCWU
 import paho.mqtt.client as mqtt
 import logging
 import sys
+import time
+
 
 # The class definition for the AppDaemon app
 class Hewalex2MQTT(hass.Hass):
@@ -38,12 +40,12 @@ class Hewalex2MQTT(hass.Hass):
 
         # Start MQTT connection
         self.start_mqtt()
-
+        
         # Declare dev as a class attribute
         self.dev = PCWU(self.conHardId, self.conSoftId, self.devHardId, self.devSoftId, self.on_message_serial)
 
-        # Call device_readregisters_enqueue to start the periodic task
-        self.device_readregisters_enqueue()
+        # Periodiek uitvoeren van device_readregisters_enqueue
+        self.run_every(self.device_readregisters_enqueue, "now", self.get_status_interval)
 
     def initLogger(self):
         # Set up the logger
@@ -190,14 +192,19 @@ class Hewalex2MQTT(hass.Hass):
         except Exception as e:
             self.logger.info('Exception in on_message_serial: '+ str(e))
     
-    def device_readregisters_enqueue(self):
-        """Get device status every x seconds"""
-        #self.logger.info('Get device status')
-        #self.logger.info(f'device_readregisters_enqueue flag_connected_mqtt: {self.flag_connected_mqtt}')
-        threading.Timer(self.get_status_interval, self.device_readregisters_enqueue).start()
+    def device_readregisters_enqueue(self, kwargs):
+        """Read registers if PCWU is enabled."""
         if self._Device_Pcwu_Enabled:        
             self.readPCWU()
             self.readPcwuConfig()
+            
+    def start_scheduler(self):
+        """Starts the scheduler to run tasks periodically."""
+        schedule.every(self.get_status_interval).seconds.do(self.device_readregisters_enqueue)
+    
+        while True:
+            schedule.run_pending()
+            time.sleep(1)
 
     def readPCWU(self):    
         # Controleer en log de waarden van de attributen
@@ -217,17 +224,21 @@ class Hewalex2MQTT(hass.Hass):
 
     
     def readPcwuConfig(self):    
-        #self.logger.info(f'readPcwuConfig flag_connected_mqtt: {self.flag_connected_mqtt}')
-        ser = serial.serial_for_url("socket://%s:%s" % (self._Device_Pcwu_Address, self._Device_Pcwu_Port))
-        #self.logger.info(f'readPCWUConfig: {ser}')
-        self.dev.readConfigRegisters(ser)
-        ser.close()
+        try:
+            #self.logger.info(f'readPcwuConfig flag_connected_mqtt: {self.flag_connected_mqtt}')
+            ser = serial.serial_for_url("socket://%s:%s" % (self._Device_Pcwu_Address, self._Device_Pcwu_Port))
+            #self.logger.info(f'readPCWUConfig: {ser}')
+            self.dev.readConfigRegisters(ser)
+        finally:
+            ser.close()
     
     def writePcwuConfig(self, registerName, payload):    
-        ser = serial.serial_for_url("socket://%s:%s" % (self._Device_Pcwu_Address, self._Device_Pcwu_Port))
-        self.logger.info(f'writePcwuConfig: {ser}')
-        self.dev.write(ser, registerName, payload)
-        ser.close()
+        try:
+            ser = serial.serial_for_url("socket://%s:%s" % (self._Device_Pcwu_Address, self._Device_Pcwu_Port))
+            self.logger.info(f'writePcwuConfig: {ser}')
+            self.dev.write(ser, registerName, payload)
+        finally:
+            ser.close()
     
     def printPcwuMqttTopics(self):        
         print('| Topic | Type | Description | ')
