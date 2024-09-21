@@ -10,7 +10,6 @@ And https://github.com/Chibald/Hewalex2Mqtt
 
 Todo (or need help)
   - Describe how to install 
-  - Using scheduler, instead of "threading.Timer
   - Improve logging and use log levels
   - Better Error Handling and Recovery
   - Put more items in config file
