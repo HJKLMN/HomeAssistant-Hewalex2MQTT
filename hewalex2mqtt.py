@@ -48,12 +48,18 @@ class Hewalex2MQTT(hass.Hass):
     def initLogger(self):
         # Set up the logger
         self.logger = logging.getLogger(__name__)
-        self.logger.setLevel(logging.DEBUG)
-        formatter = logging.Formatter('%(asctime)s :: %(name)s :: %(levelname)s :: %(message)s')
-        stream_handler = logging.StreamHandler(sys.stdout)
-        stream_handler.setFormatter(formatter)
-        stream_handler.setLevel(logging.DEBUG)
-        self.logger.addHandler(stream_handler)
+        self.logger.setLevel(logging.INFO)
+        
+        # Controleer of de logger al handlers heeft om dubbele logging te voorkomen
+        if not self.logger.hasHandlers():
+            formatter = logging.Formatter('%(asctime)s :: %(name)s :: %(levelname)s :: %(message)s')
+            stream_handler = logging.StreamHandler(sys.stdout)
+            stream_handler.setFormatter(formatter)
+            stream_handler.setLevel(logging.INFO)
+            
+            # Voeg alleen de handler toe als er nog geen handler is
+            self.logger.addHandler(stream_handler)
+        
         self.logger.info("Initializing Hewalex 2 Mqtt")
 
     # Read Configs
@@ -112,7 +118,7 @@ class Hewalex2MQTT(hass.Hass):
         self.logger.info(f"Attempting to write to register: {registerName} with value: {payload}")
         try:
         # Open the serial connection
-            with serial.serial_for_url(f"socket://{self._Device_Pcwu_Address}:{self._Device_Pcwu_Port}") as ser:
+            with serial.serial_for_url(f"socket://{self._Device_Pcwu_Address}:{self._Device_Pcwu_Port}", baudrate=38400, timeout=3, write_timeout=2) as ser:
                 # Call the write function on the PCWU device
                 result = self.dev.write(ser, registerName, payload)
                 # Check if the write was successful
@@ -141,7 +147,7 @@ class Hewalex2MQTT(hass.Hass):
         self.mqtt_client.on_connect = self.on_mqtt_connect
         self.mqtt_client.on_disconnect = self.on_mqtt_disconnect
         self.mqtt_client.on_message = self.on_message_mqtt
-        self.mqtt_client.enable_logger(self.logger)
+        # self.mqtt_client.enable_logger(self.logger)
         self.mqtt_client.connect(self._MQTT_ip, self._MQTT_port)
         if self._Device_Pcwu_Enabled:
             self.logger.info('Subscribed to: ' + self._Device_Pcwu_MqttTopic + '/Command/#')
@@ -218,13 +224,13 @@ class Hewalex2MQTT(hass.Hass):
     
     def readPcwuConfig(self):    
         #self.logger.info(f'readPcwuConfig flag_connected_mqtt: {self.flag_connected_mqtt}')
-        ser = serial.serial_for_url("socket://%s:%s" % (self._Device_Pcwu_Address, self._Device_Pcwu_Port))
+        ser = serial.serial_for_url("socket://%s:%s" % (self._Device_Pcwu_Address, self._Device_Pcwu_Port), baudrate=38400, timeout=3)
         #self.logger.info(f'readPCWUConfig: {ser}')
         self.dev.readConfigRegisters(ser)
         ser.close()
     
     def writePcwuConfig(self, registerName, payload):    
-        ser = serial.serial_for_url("socket://%s:%s" % (self._Device_Pcwu_Address, self._Device_Pcwu_Port))
+        ser = serial.serial_for_url("socket://%s:%s" % (self._Device_Pcwu_Address, self._Device_Pcwu_Port), baudrate=38400, timeout=3, write_timeout=2)
         self.logger.info(f'writePcwuConfig: {ser}')
         self.dev.write(ser, registerName, payload)
         ser.close()
