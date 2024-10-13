@@ -118,7 +118,7 @@ class Hewalex2MQTT(hass.Hass):
         self.logger.info(f"Attempting to write to register: {registerName} with value: {payload}")
         try:
         # Open the serial connection
-            with serial.serial_for_url(f"socket://{self._Device_Pcwu_Address}:{self._Device_Pcwu_Port}", baudrate=38400, timeout=3, write_timeout=2) as ser:
+            with serial.serial_for_url(f"socket://{self._Device_Pcwu_Address}:{self._Device_Pcwu_Port}", baudrate=38400, timeout=2, write_timeout=2) as ser:
                 # Call the write function on the PCWU device
                 result = self.dev.write(ser, registerName, payload)
                 # Check if the write was successful
@@ -224,17 +224,12 @@ class Hewalex2MQTT(hass.Hass):
     
     def readPcwuConfig(self):    
         #self.logger.info(f'readPcwuConfig flag_connected_mqtt: {self.flag_connected_mqtt}')
-        ser = serial.serial_for_url("socket://%s:%s" % (self._Device_Pcwu_Address, self._Device_Pcwu_Port), baudrate=38400, timeout=3)
+        ser = serial.serial_for_url("socket://%s:%s" % (self._Device_Pcwu_Address, self._Device_Pcwu_Port), baudrate=38400, timeout=2)
         #self.logger.info(f'readPCWUConfig: {ser}')
         self.dev.readConfigRegisters(ser)
         ser.close()
-    
-    def writePcwuConfig(self, registerName, payload):    
-        ser = serial.serial_for_url("socket://%s:%s" % (self._Device_Pcwu_Address, self._Device_Pcwu_Port), baudrate=38400, timeout=3, write_timeout=2)
-        self.logger.info(f'writePcwuConfig: {ser}')
-        self.dev.write(ser, registerName, payload)
-        ser.close()
-    
+  
+   
     def printPcwuMqttTopics(self):        
         print('| Topic | Type | Description | ')
         print('| ----------------------- | ----------- | ---------------------------')
