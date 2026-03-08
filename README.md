@@ -1,106 +1,119 @@
 # HomeAssistant-Hewalex2MQTT
 
-AppDaemon-based MQTT gateway to integrate Hewalex heat pumps into Home Assistant.
-Reads status and config registers from the heat pump via RS485/TCP and publishes them as MQTT topics. Also supports writing config registers (e.g. target temperature) back to the device.
+An [AppDaemon](https://appdaemon.readthedocs.io/) app that bridges a **Hewalex PCWU heat pump** to Home Assistant via MQTT. It reads status and configuration registers over RS485 and publishes them as MQTT topics. It also accepts MQTT command messages to write configuration values back to the device.
 
 Based on the work by [Jojan265](https://gathering.tweakers.net/forum/view_message/79522762) and [Chibald/Hewalex2Mqtt](https://github.com/Chibald/Hewalex2Mqtt).
 
 ---
 
-## 1. What does this do
+## Table of contents
 
-- Connects to a Hewalex PCWU heat pump via an RS485-to-TCP gateway
-- Polls status registers every 60 seconds and config registers every 10 minutes
-- Publishes all register values as MQTT topics under a configurable base topic (e.g. `Heatpump/T1`, `Heatpump/HeatPumpEnabled`)
-- Subscribes to `<topic>/Command/<register>` for write-back (e.g. setting target temperature)
-- Reports online/offline status to Home Assistant via `sensor.hewalex_status`
-- Handles RS485 errors gracefully: soft errors are ignored, hard errors trigger a 60s backoff and MQTT reconnect
+1. [What it does](#1-what-it-does)
+2. [Requirements](#2-requirements)
+3. [RS485 hardware options](#3-rs485-hardware-options)
+4. [Installation](#4-installation)
+5. [Configuration](#5-configuration)
+6. [MQTT topics](#6-mqtt-topics)
+7. [Home Assistant integration](#7-home-assistant-integration)
+8. [Troubleshooting](#8-troubleshooting)
+9. [Credits](#9-credits)
+
+---
+
+## 1. What it does
+
+- Polls the Hewalex PCWU heat pump every **60 seconds** for status registers (temperatures, component states)
+- Polls configuration registers every **10 minutes** (target temperature, hysteresis, defrost settings)
+- Publishes all values as retained MQTT messages under a configurable base topic (default: `Heatpump`)
+- Subscribes to `<topic>/Command/<register>` for write-back commands from Home Assistant
+- Exposes a `sensor.hewalex_status` entity in HA (`online` / `offline`) via the watchdog
+- Handles RS485 connection errors gracefully with automatic reconnect and a 60 s cooldown
 
 ---
 
 ## 2. Requirements
 
-**Hardware**
-- Hewalex PCWU heat pump with RS485 port (GeCo controller)
-- RS485-to-TCP gateway (see section 3)
-
 **Software**
-- Home Assistant with the [AppDaemon add-on](https://github.com/hassio-addons/addon-appdaemon)
-- MQTT broker (e.g. Mosquitto add-on)
-- Python packages (installed in the AppDaemon environment):
+- Home Assistant with the [AppDaemon add-on](https://github.com/hassio-addons/addon-appdaemon) installed
+- An MQTT broker (e.g. Mosquitto add-on)
+- Python packages (installed automatically by AppDaemon if listed in its config):
   - `pyserial`
   - `paho-mqtt`
 
+**Hardware**
+- A Hewalex PCWU heat pump with the RS485 port accessible
+- An RS485-to-TCP or RS485-to-USB adapter (see section 3)
+
 ---
 
-## 3. Hardware options for RS485 connection
+## 3. RS485 hardware options
 
-The heat pump communicates via RS485 at 38400 baud. You need a gateway that exposes this as a TCP socket.
+The script connects to the heat pump via a TCP socket (`socket://ip:port`). You need an RS485-to-Ethernet adapter.
 
-| Option | Notes |
-|---|---|
-| Waveshare RS485 TO ETH | Recommended. Configure in TCP Server mode, port 8899. |
-| USR-TCP232-304 | Similar setup, works well. |
-| Direct USB-serial (pyserial) | Possible but requires code change: replace `socket://` URL with serial port path. |
+| Option | Example | Notes |
+|---|---|---|
+| RS485-to-Ethernet | Waveshare RS485 TO ETH (B) | Recommended. Configure as TCP server on port 8899. |
+| RS485-to-USB + ser2net | Any USB-RS485 dongle | Run `ser2net` on a Pi or server to expose the port over TCP. |
+| Direct USB (not recommended) | — | Requires modifying the serial URL in the script; no TCP gateway needed but less flexible. |
 
-Wiring: connect the RS485 A/B terminals of the gateway to the RS485 port on the GeCo controller board of the heat pump.
+The gateway **must** be configured for: 38400 baud, 8 data bits, no parity, 1 stop bit.
 
 ---
 
 ## 4. Installation
 
-1. Install the AppDaemon add-on in Home Assistant.
+1. **Install the AppDaemon add-on** in Home Assistant (Supervisor → Add-on store → AppDaemon).
 
-2. Copy the following files to your AppDaemon apps directory (typically `/config/appdaemon/apps/` or `/addon_configs/a0d7b954_appdaemon/apps/`):
-   - `hewalex2mqtt.py`
-   - `hewalex2mqttconfig.ini` (copy from `hewalex2mqttconfig.ini.example` and fill in your values)
-   - The `hewalex_geco/` directory (contains the RS485 protocol library)
+2. **Copy the app files** to the AppDaemon apps directory (typically `/addon_configs/a0d7b954_appdaemon/apps/`):
+   ```
+   hewalex2mqtt.py
+   hewalex2mqttconfig.ini        ← create from the .example file
+   hewalex_geco/                 ← include the full directory
+   ```
 
-3. Add the app to your AppDaemon `apps.yaml`:
+3. **Add the app to `apps.yaml`** (in the same apps directory):
+   ```yaml
+   hewalex2mqtt:
+     module: hewalex2mqtt
+     class: Hewalex2MQTT
+   ```
 
-```yaml
-hewalex2mqtt:
-  module: hewalex2mqtt
-  class: Hewalex2MQTT
-```
+4. **Create `hewalex2mqttconfig.ini`** by copying `hewalex2mqttconfig.ini.example` and filling in your values (see section 5).
 
-4. Copy `config/packages/hewalex.yaml` to your Home Assistant packages directory and make sure packages are enabled in `configuration.yaml`:
+5. **Add the HA package** `config/packages/hewalex.yaml` to your Home Assistant `/config/packages/` directory (see section 7).
 
-```yaml
-homeassistant:
-  packages: !include_dir_named packages
-```
-
-5. Restart AppDaemon. Check the AppDaemon log for `Starting Hewalex 2 MQTT` and `MQTT connected`.
+6. **Restart AppDaemon**. Check the AppDaemon log for `Starting Hewalex2MQTT` and subsequent `Read OK` lines.
 
 ---
 
 ## 5. Configuration
 
-Copy `hewalex2mqttconfig.ini.example` to `hewalex2mqttconfig.ini` and set your values.
+All settings are in `hewalex2mqttconfig.ini`. Copy `hewalex2mqttconfig.ini.example` and edit:
 
-```ini
-[MQTT]
-MQTT_ip = 192.168.1.100       # IP of your MQTT broker
-MQTT_port = 1883
-MQTT_authentication = True
-MQTT_user = youruser
-MQTT_pass = yourpassword
+### [MQTT]
 
-[Pcwu]
-Device_Pcwu_Enabled = True
-Device_Pcwu_Address = 192.168.1.50  # IP of RS485-to-TCP gateway
-Device_Pcwu_Port = 8899             # TCP port on gateway
-Device_Pcwu_MqttTopic = Heatpump   # Base MQTT topic
-Baudrate = 38400
-Bytesize = 8
-Parity = NONE
-Stopbits = 1
-Timeout = 1
-DebugLogging = False                # Set True for verbose logging
-```
+| Key | Description |
+|---|---|
+| `MQTT_ip` | IP address of your MQTT broker |
+| `MQTT_port` | MQTT port (default: `1883`) |
+| `MQTT_authentication` | `True` / `False` — enable broker authentication |
+| `MQTT_user` | MQTT username |
+| `MQTT_pass` | MQTT password |
 
-The `[ZPS]` section is for a solar boiler controller (not a heat pump). Set `Device_Zps_Enabled = False` unless you have one.
+### [Pcwu]
+
+| Key | Description |
+|---|---|
+| `Device_Pcwu_Enabled` | `True` to activate the heat pump device |
+| `Device_Pcwu_Address` | IP address of the RS485-to-TCP gateway |
+| `Device_Pcwu_Port` | TCP port of the gateway (default: `8899`) |
+| `Device_Pcwu_MqttTopic` | Base MQTT topic (default: `Heatpump`) |
+| `Baudrate` | Must match gateway config (default: `38400`) |
+| `DebugLogging` | `True` to enable verbose DEBUG output in AppDaemon logs |
+
+### [ZPS] (optional)
+
+For solar boiler controllers. Set `Device_Zps_Enabled = True` and fill in address/port/topic. Currently the ZPS device class is not bundled — this section is reserved for future use.
 
 ---
 
@@ -112,88 +125,99 @@ All topics use the base topic configured in `Device_Pcwu_MqttTopic` (default: `H
 
 | Topic | Type | Description |
 |---|---|---|
-| `Heatpump/T1` | float | Ambient temperature (°C) |
-| `Heatpump/T2` | float | Floor heating outlet (°C) |
-| `Heatpump/T3` | float | Floor heating inlet (°C) |
-| `Heatpump/T6` | float | Water pump inlet (°C) |
-| `Heatpump/T7` | float | Heat pump outlet (°C) |
-| `Heatpump/T8` | float | Evaporator (°C) |
-| `Heatpump/T9` | float | Before compressor (°C) |
-| `Heatpump/T10` | float | After compressor (°C) |
+| `Heatpump/T1` | float (°C) | Ambient temperature |
+| `Heatpump/T2` | float (°C) | Floor heating outlet temperature |
+| `Heatpump/T3` | float (°C) | Floor heating inlet temperature |
+| `Heatpump/T6` | float (°C) | Water pump inlet temperature |
+| `Heatpump/T7` | float (°C) | Heat pump outlet temperature |
+| `Heatpump/T8` | float (°C) | Evaporator temperature |
+| `Heatpump/T9` | float (°C) | Before compressor temperature |
+| `Heatpump/T10` | float (°C) | After compressor temperature |
 | `Heatpump/EV1` | int | Expansion valve position |
-| `Heatpump/HeatPumpEnabled` | bool | Heat pump on/off |
-| `Heatpump/CompressorON` | bool | Compressor running |
-| `Heatpump/CirculationPumpON` | bool | Circulation pump running |
-| `Heatpump/FanON` | bool | Fan running |
-| `Heatpump/HeaterEON` | bool | Electric heater active |
-| `Heatpump/WaitingStatus` | string | Waiting/error status |
-| `Heatpump/TapWaterTemp` | float | Target temperature setpoint (°C) |
-| `Heatpump/TapWaterHysteresis` | float | Hysteresis (°C) |
-| `Heatpump/DefrostingInterval` | int | Defrost interval (min) |
-| `Heatpump/DefrostingStartTemp` | float | Defrost start temperature (°C) |
-| `Heatpump/DefrostingStopTemp` | float | Defrost stop temperature (°C) |
-| `Heatpump/DefrostingMaxTime` | int | Max defrost duration (min) |
+| `Heatpump/HeatPumpEnabled` | bool string | `True` / `False` — pump on/off |
+| `Heatpump/CirculationPumpON` | bool string | Circulation pump running |
+| `Heatpump/FanON` | bool string | Fan running |
+| `Heatpump/HeaterEON` | bool string | Electric heater active |
+| `Heatpump/CompressorON` | bool string | Compressor running |
+| `Heatpump/WaitingStatus` | string | Device waiting/error state |
+| `Heatpump/TapWaterTemp` | float (°C) | Target water temperature |
+| `Heatpump/TapWaterHysteresis` | float (°C) | Hysteresis setting |
+| `Heatpump/DefrostingInterval` | int (min) | Defrost check interval |
+| `Heatpump/DefrostingStartTemp` | float (°C) | Temperature to trigger defrost |
+| `Heatpump/DefrostingStopTemp` | float (°C) | Temperature to end defrost |
+| `Heatpump/DefrostingMaxTime` | int (min) | Maximum defrost duration |
 
-### Command topics (subscribed by the app)
+### Command topics (subscribe to change settings)
 
-Send a value to `Heatpump/Command/<register>` to write it to the device.
+Publish to `Heatpump/Command/<register>` to update a writable config register.
 
-| Topic | Example payload | Description |
+| Topic | Example value | Description |
 |---|---|---|
-| `Heatpump/Command/TapWaterTemp` | `35` | Set target temperature |
-| `Heatpump/Command/TapWaterHysteresis` | `5` | Set hysteresis |
-| `Heatpump/Command/DefrostingInterval` | `60` | Set defrost interval |
+| `Heatpump/Command/TapWaterTemp` | `35` | Set target water temperature |
+| `Heatpump/Command/TapWaterHysteresis` | `6` | Set hysteresis |
+| `Heatpump/Command/DefrostingInterval` | `30` | Set defrost interval (min) |
+| `Heatpump/Command/DefrostingStartTemp` | `-5` | Set defrost trigger temperature |
+| `Heatpump/Command/DefrostingStopTemp` | `5` | Set defrost stop temperature |
+| `Heatpump/Command/DefrostingMaxTime` | `20` | Set max defrost duration (min) |
 
-Note: `Heatpump/Command/HeatPumpEnabled` is blocked at the app level. Use the MQTT switch in the HA package instead.
+> **Note:** `HeatPumpEnabled` is intentionally blocked from write-back to prevent unwanted state changes from MQTT retained messages. Use the HA switch entity instead.
 
 ---
 
 ## 7. Home Assistant integration
 
-The `config/packages/hewalex.yaml` package file creates all entities automatically using MQTT discovery-style manual config. Place it in your HA packages directory.
+Copy `config/packages/hewalex.yaml` to your `/config/packages/` directory.
 
-It creates:
-- 1 switch (`Warmtepomp Aan`) — controls `HeatPumpEnabled`
-- 16 sensors — all temperature, status and config registers
-- 5 binary sensors — compressor, fan, circulation pump, heater, heat pump status
-- 2 climate entities — target temperature control and hysteresis control
+Enable packages in `configuration.yaml` if not already done:
 
-All entities are grouped under the device `Warmtepomp Hewalex` in the HA device registry.
+```yaml
+homeassistant:
+  packages: !include_dir_named packages
+```
 
-The app also creates `sensor.hewalex_status` directly via AppDaemon with state `online` / `offline`.
+The package creates:
+- **1 switch** — turn the heat pump on/off
+- **17 sensors** — all temperature and status values
+- **5 binary sensors** — running states (pump, fan, compressor, heater)
+- **2 climate entities** — floor heating temperature control and hysteresis control
+
+All entities are grouped under the `Hewalex Heat Pump` device in Home Assistant.
+
+A virtual `sensor.hewalex_status` entity is maintained by the AppDaemon app itself (not via MQTT). It shows `online` when data is received and switches to `offline` after 5 minutes without a successful RS485 read.
 
 ---
 
 ## 8. Troubleshooting
 
-**No data appearing in HA**
-- Check AppDaemon log for `MQTT connected` and `Read OK`
-- Verify `Device_Pcwu_Address` and port are reachable from the HA host
-- Check that the RS485 gateway is in TCP Server mode
+**No data in Home Assistant after startup**
+- Check AppDaemon logs for `RS485 read error` or `MQTT connect failed`
+- Verify the gateway IP and port in `hewalex2mqttconfig.ini`
+- Confirm the gateway is reachable: `nc -zv <gateway_ip> 8899`
+- Confirm MQTT broker credentials are correct
 
 **`sensor.hewalex_status` shows `offline`**
-- No successful RS485 read for >5 minutes
-- Check network connectivity to the RS485 gateway
-- Check AppDaemon log for RS485 error messages
+- No successful RS485 read in the last 5 minutes
+- Check physical RS485 wiring and gateway power
+- Enable `DebugLogging = True` temporarily and restart AppDaemon
 
-**RS485 blocked for 60s**
-- A hard connection error was detected (timeout, broken pipe, etc.)
-- The app will automatically retry after 60 seconds
-- If it keeps happening: check cable, gateway power, and port configuration
+**RS485 blocked for 60 s**
+- Logged as: `RS485 blocked for 60 s due to error: ...`
+- A hard connection error (timeout, broken pipe, port unavailable) triggered the cooldown
+- The app will resume automatically after 60 s
 
-**MQTT reconnect loop**
-- Check broker IP, port, and credentials in `hewalex2mqttconfig.ini`
-- Reconnects are rate-limited to once per 30 seconds
+**Write commands are ignored**
+- Check that the register name matches exactly (case-sensitive)
+- `HeatPumpEnabled` is intentionally blocked — use the HA switch
+- Duplicate commands within 10 s are silently ignored
 
-**Commands not being written**
-- Check AppDaemon log for `Command <reg> -> <value>` and the subsequent `Write <reg>=<value> - OK`
-- If `FAILED`: check RS485 connectivity
-- `HeatPumpEnabled` commands are intentionally blocked at the app level
+**AppDaemon does not load the app**
+- Verify the `apps.yaml` entry matches `module: hewalex2mqtt` and `class: Hewalex2MQTT`
+- Ensure `hewalex_geco/` is present in the apps directory alongside `hewalex2mqtt.py`
 
 ---
 
 ## 9. Credits
 
-Based on:
-- [Jojan265](https://gathering.tweakers.net/forum/view_message/79522762) — original reverse engineering of the Hewalex GeCo RS485 protocol
-- [Chibald/Hewalex2Mqtt](https://github.com/Chibald/Hewalex2Mqtt) — Python library (`hewalex_geco`)
+- Protocol research and initial implementation: [Jojan265](https://gathering.tweakers.net/forum/view_message/79522762)
+- Hewalex GECO protocol library: [Chibald/Hewalex2Mqtt](https://github.com/Chibald/Hewalex2Mqtt)
+- AppDaemon integration and production hardening: [HJKLMN](https://github.com/HJKLMN)
