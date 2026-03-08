@@ -1,0 +1,34 @@
+[MQTT]
+# IP address of your MQTT broker
+MQTT_ip = 192.168.1.100
+# MQTT broker port (default: 1883)
+MQTT_port = 1883
+# Set to True if your broker requires authentication
+MQTT_authentication = True
+MQTT_user = youruser
+MQTT_pass = yourpassword
+
+[ZPS]
+# Solar boiler controller (ZPS) - set to True to enable
+Device_Zps_Enabled = False
+Device_Zps_Address = 192.168.1.7
+Device_Zps_Port = 8899
+Device_Zps_MqttTopic = SolarBoiler
+
+[Pcwu]
+# Heat pump (PCWU) - set to True to enable
+Device_Pcwu_Enabled = True
+# IP address of your RS485-to-TCP gateway (e.g. Waveshare RS485 TO ETH)
+Device_Pcwu_Address = 192.168.1.50
+# TCP port configured on the RS485 gateway (default Waveshare: 8899)
+Device_Pcwu_Port = 8899
+# MQTT base topic for all heat pump state and command messages
+Device_Pcwu_MqttTopic = Heatpump
+# Serial settings - these must match the RS485 gateway configuration
+Baudrate = 38400
+Bytesize = 8
+Parity = NONE
+Stopbits = 1
+Timeout = 1
+# Set to True to enable verbose DEBUG logging in AppDaemon
+DebugLogging = False

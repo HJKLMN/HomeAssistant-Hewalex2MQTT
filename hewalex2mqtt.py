@@ -1,259 +1,435 @@
 import appdaemon.plugins.hass.hassapi as hass
-import os
-import threading
 import configparser
 import serial
 from hewalex_geco.devices import PCWU
 import paho.mqtt.client as mqtt
-import logging
-import sys
+import time
+import traceback
+import datetime
+import random
+import threading
 
-# The class definition for the AppDaemon app
+# Soft errors from the RS485 library that are non-fatal and can be ignored
+SOFT_ERRORS = ("Invalid soft message len", "Invalid Const Bytes")
+
+# Registers that may arrive via MQTT Command but must NOT be written to the device.
+# HeatPumpEnabled is managed via the HA switch, not the command queue,
+# to prevent unintended writes on retained message re-delivery.
+BLOCKED_COMMAND_REGISTERS = frozenset({"HeatPumpEnabled"})
+
+
 class Hewalex2MQTT(hass.Hass):
-    # Declare dev as a class attribute
-    dev = None
+    """Read Hewalex heat pump via RS485/TCP and publish state to MQTT.
+    
+    Also reports online/offline status to Home Assistant via sensor.hewalex_status.
+    Based on work by Jojan265 and Chibald/Hewalex2Mqtt.
+    """
 
-    # Your app initialization logic here
     def initialize(self):
-        # polling interval
-        self.get_status_interval = 30.0
-        
-        # Controller (Master)
-        self.conHardId = 1
-        self.conSoftId = 1
-        
-        # PCWU (Slave)
-        self.devHardId = 2
-        self.devSoftId = 2
+        self.log("Starting Hewalex 2 MQTT")
 
-        #mqtt
-        self.flag_connected_mqtt = 0
         self.MessageCache = {}
+        self.ser_lock = threading.Lock()
+        self.mqtt_lock = threading.Lock()
+        self._last_read_count = 0
+        self._last_new_count = 0
 
-        # Initialize the logger
-        self.initLogger()
+        self.last_mqtt_restart = 0
+        self.last_success = time.time()
+        self.offline_reported = False
+        self.writing_active = False
+        self.last_write_time = 0
+        self.rs485_block_until = 0
 
-        # Initialize the configuration first
+        # Deduplication: track last command+value+timestamp per register
+        self._last_command = {}  # {reg: (payload, timestamp)}
+
         self.initConfiguration()
 
-        # Start MQTT connection
+        self.dev = PCWU(1, 1, 2, 2, self.on_message_serial)
         self.start_mqtt()
 
-        # Declare dev as a class attribute
-        self.dev = PCWU(self.conHardId, self.conSoftId, self.devHardId, self.devSoftId, self.on_message_serial)
+        # Write-queue + worker thread
+        self.write_queue = {}
+        self.write_lock = threading.Lock()
+        self.write_thread_stop = threading.Event()
+        self.write_thread = threading.Thread(target=self.write_worker, daemon=True)
+        self.write_thread.start()
 
-        # Call device_readregisters_enqueue to start the periodic task
-        self.device_readregisters_enqueue()
+        start_poll = self.datetime() + datetime.timedelta(seconds=5)
+        start_watchdog = self.datetime() + datetime.timedelta(seconds=60)
+        start_config = self.datetime() + datetime.timedelta(seconds=90)
 
-    def initLogger(self):
-        # Set up the logger
-        self.logger = logging.getLogger(__name__)
-        self.logger.setLevel(logging.INFO)
-        
-        # Controleer of de logger al handlers heeft om dubbele logging te voorkomen
-        if not self.logger.hasHandlers():
-            formatter = logging.Formatter('%(asctime)s :: %(name)s :: %(levelname)s :: %(message)s')
-            stream_handler = logging.StreamHandler(sys.stdout)
-            stream_handler.setFormatter(formatter)
-            stream_handler.setLevel(logging.INFO)
-            
-            # Voeg alleen de handler toe als er nog geen handler is
-            self.logger.addHandler(stream_handler)
-        
-        self.logger.info("Initializing Hewalex 2 Mqtt")
+        self.poll_handle = self.run_every(self.readPCWU_cb, start_poll, 60)
+        self.watchdog_handle = self.run_every(self.watchdog_cb, start_watchdog, 60)
+        self.config_refresh_handle = self.run_every(
+            self.readPcwuConfig_cb, start_config, 600
+        )
 
-    # Read Configs
+        self.log("Polling interval: 60s | Config-read interval: 600s")
+
+    def terminate(self):
+        try:
+            self.write_thread_stop.set()
+        except Exception:
+            pass
+
+    # ---------------------------------------------------------------
+    # Configuration
+    # ---------------------------------------------------------------
     def initConfiguration(self):
-        self.logger.info("reading config")
-        config_file = os.path.join(os.path.dirname(__file__), 'hewalex2mqttconfig.ini')
-        config = configparser.ConfigParser()
-        config.read(config_file)
-    
-        # Mqtt
-        self._MQTT_ip = config.get('MQTT', 'MQTT_ip')
-        self._MQTT_port = config.getint('MQTT', 'MQTT_port')
-        self._MQTT_authentication = config.getboolean('MQTT', 'MQTT_authentication')
-        self._MQTT_user = config.get('MQTT', 'MQTT_user')
-        self._MQTT_pass = config.get('MQTT', 'MQTT_pass')
-        self.logger.info(f'MQTT ip: {self._MQTT_ip}')
-        self.logger.info(f'MQTT port: {self._MQTT_port}')
-        self.logger.info(f'MQTT authentication: {self._MQTT_authentication}')
-        self.logger.info(f'MQTT user: {self._MQTT_user}')
-        self.logger.info(f'MQTT pass: {self._MQTT_pass}')
+        cfg = configparser.ConfigParser()
+        cfg.read("/config/apps/hewalex2mqttconfig.ini")
 
-        # PCWU Device
-        self._Device_Pcwu_Enabled = config.getboolean('Pcwu', 'Device_Pcwu_Enabled')
-        if self._Device_Pcwu_Enabled:
-            self._Device_Pcwu_Address = config.get('Pcwu', 'Device_Pcwu_Address')
-            self._Device_Pcwu_Port = config.getint('Pcwu', 'Device_Pcwu_Port')
-            self._Device_Pcwu_MqttTopic = config.get('Pcwu', 'Device_Pcwu_MqttTopic')
-            self.logger.info(f'Device_Pcwu_MqttTopic: {self._Device_Pcwu_MqttTopic}')
-    
-        # Use the values as needed in your app
-        if self._Device_Pcwu_Enabled:
-            # Create the serial connection with the correct baudrate
-            # Do something with self._Device_Pcwu_Address, self._Device_Pcwu_Port, and self._Device_Pcwu_MqttTopic
-            # For example, assign them to class attributes
-            pass
-        else:
-            # Handle the case when Pcwu is not enabled
-            pass
+        self._MQTT_ip = cfg["MQTT"]["MQTT_ip"]
+        self._MQTT_port = cfg.getint("MQTT", "MQTT_port")
+        self._MQTT_auth = cfg.getboolean("MQTT", "MQTT_authentication")
+        self._MQTT_user = cfg["MQTT"]["MQTT_user"]
+        self._MQTT_pass = cfg["MQTT"]["MQTT_pass"]
 
-    def on_message_mqtt(self, client, userdata, message):
-        self.logger.info("Received message with topic: {}".format(message.topic))
-        self.logger.info("Received command: {}".format(message.payload.decode('utf-8')))
+        self._addr = cfg["Pcwu"]["Device_Pcwu_Address"]
+        self._port = cfg["Pcwu"]["Device_Pcwu_Port"]
+        self._topic = cfg["Pcwu"]["Device_Pcwu_MqttTopic"]
+        self._enabled = cfg.getboolean("Pcwu", "Device_Pcwu_Enabled")
 
-        # Verwerkt commando's bedoeld voor PCWU-apparaat
-        if message.topic.startswith(f"{self._Device_Pcwu_MqttTopic}/Command/"):
-            register_name = message.topic.split('/')[-1]  # Extract the register name from the topic
-            command_value = message.payload.decode('utf-8')
-            self.logger.info(f"Received command to set {register_name} to {command_value}")
-            self.writePcwuConfig(register_name, command_value)
-        else:
-            # Handle other MQTT messages if needed
-            self.logger.info("Received unrelated MQTT message, no action taken.")
-        
-    def writePcwuConfig(self, registerName, payload):
-        # Log the attempt to write to the PCWU device
-        self.logger.info(f"Attempting to write to register: {registerName} with value: {payload}")
         try:
-        # Open the serial connection
-            with serial.serial_for_url(f"socket://{self._Device_Pcwu_Address}:{self._Device_Pcwu_Port}", baudrate=38400, timeout=2, write_timeout=2) as ser:
-                # Call the write function on the PCWU device
-                result = self.dev.write(ser, registerName, payload)
-                # Check if the write was successful
-                if result:
-                    self.logger.info(f"Successfully wrote {payload} to {registerName}")
-                else:
-                    self.logger.error(f"Failed to write {payload} to {registerName}")
-        except Exception as e:
-            self.logger.error(f"Error writing to PCWU: {e}")
+            self._debug = cfg.getboolean("Pcwu", "DebugLogging", fallback=False)
+        except TypeError:
+            try:
+                self._debug = cfg.getboolean("Pcwu", "DebugLogging")
+            except Exception:
+                self._debug = False
 
+    def dlog(self, msg):
+        """Log only when DebugLogging = True in config."""
+        if getattr(self, "_debug", False):
+            self.log(msg, level="DEBUG")
 
-
-    # Define flag_connected_mqtt as a global variable at the beginning of the script
-    #flag_connected_mqtt = 0
-    def log_mqtt_status(self, kwargs):
-        if self.flag_connected_mqtt == 1:
-            self.logger.info("MQTT Broker is connected.")
-        else:
-            self.logger.info("MQTT Broker is disconnected.")
-
+    # ---------------------------------------------------------------
+    # MQTT
+    # ---------------------------------------------------------------
     def start_mqtt(self):
-        self.mqtt_client = mqtt.Client()
-        if self._MQTT_authentication:
-            self.mqtt_client.username_pw_set(username=self._MQTT_user, password=self._MQTT_pass)
-            
-        self.mqtt_client.on_connect = self.on_mqtt_connect
-        self.mqtt_client.on_disconnect = self.on_mqtt_disconnect
-        self.mqtt_client.on_message = self.on_message_mqtt
-        # self.mqtt_client.enable_logger(self.logger)
-        self.mqtt_client.connect(self._MQTT_ip, self._MQTT_port)
-        if self._Device_Pcwu_Enabled:
-            self.logger.info('Subscribed to: ' + self._Device_Pcwu_MqttTopic + '/Command/#')
-            self.mqtt_client.subscribe(self._Device_Pcwu_MqttTopic + '/Command/#', qos=1)
+        with self.mqtt_lock:
+            now = time.time()
+            if now - self.last_mqtt_restart < 30:
+                self.dlog("MQTT reconnect suppressed (too soon)")
+                return
+            self.last_mqtt_restart = now
 
-        self.mqtt_client.loop_start()
-    
-    def on_mqtt_connect(self, client, userdata, flags, rc):
-        self.logger.info("Verbonden to MQTT Broker with result code: {}".format(rc))
-        # Update dit om te abonneren op het correcte topic dat overeenkomt met je MQTT configuratie voor PCWU
-        base_topic = f"{self._Device_Pcwu_MqttTopic}/#"  # Abonneer op alle subtopics onder je basis PCWU topic
-        self.mqtt_client.subscribe(base_topic)
-        self.logger.info(f"ABBOSubscribed to MQTT topic: {base_topic}")
-        self.flag_connected_mqtt = 1
-    
-    def on_mqtt_disconnect(self, client, userdata, rc):
-        self.logger.info("Disconnected from MQTT Broker with result code: {}".format(rc))
-        self.flag_connected_mqtt = 0
-    
-    def on_message_serial(self, obj, h, sh, m):
-        #self.logger.info(f'on_message_serial flag_connected_mqtt: {self.flag_connected_mqtt}')
-        #self.logger.info('on_message_serial')
-        #self.logger.info(f'MessageCache obj: {obj}')
-        #self.logger.info(f'MessageCache h: {h}')
-        #self.logger.info(f'MessageCache sh: {sh}')
-        #self.logger.info(f'MessageCache m: {m}')
-        try:    
-            if self.flag_connected_mqtt != 1:
-                self.logger.info('on_message_serial not connected to mqtt')
-                return False
-            
-            global MessageCache
-            topic = self._Device_Pcwu_MqttTopic
-            if sh["FNC"] == 0x50:
-                mp = obj.parseRegisters(sh["RestMessage"], sh["RegStart"], sh["RegLen"])        
-                for item in mp.items():
-                    if isinstance(item[1], dict): # skipping dictionaries (time program) 
-                        continue
-                    key = topic + '/' + str(item[0])
-                    val = str(item[1])
-                    if key not in self.MessageCache or self.MessageCache[key] != val:
-                        self.MessageCache[key] = val
-                        self.logger.info(key + " " + val)
-                        self.mqtt_client.publish(key, val)
-    
-        except Exception as e:
-            self.logger.info('Exception in on_message_serial: '+ str(e))
-    
-    def device_readregisters_enqueue(self):
-        """Get device status every x seconds"""
-        #self.logger.info('Get device status')
-        #self.logger.info(f'device_readregisters_enqueue flag_connected_mqtt: {self.flag_connected_mqtt}')
-        threading.Timer(self.get_status_interval, self.device_readregisters_enqueue).start()
-        if self._Device_Pcwu_Enabled:        
-            self.readPCWU()
-            self.readPcwuConfig()
-
-    def readPCWU(self):    
-        # Controleer en log de waarden van de attributen
-        self.logger.info(f"Connecting to PCWU at {self._Device_Pcwu_Address}:{self._Device_Pcwu_Port}")
         try:
-            with serial.serial_for_url(f"socket://{self._Device_Pcwu_Address}:{self._Device_Pcwu_Port}") as ser:
-                self.logger.info("Serial connection established.")
-                self.dev = PCWU(self.conHardId, self.conSoftId, self.devHardId, self.devSoftId, self.on_message_serial)
-                read_data = self.dev.readStatusRegisters(ser)
-                # Log alleen of er data ontvangen is of niet, zonder de data zelf te tonen
-                if read_data:
-                    self.logger.info("Data successfully received from PCWU.")
-                else:
-                    self.logger.info("No data received from PCWU.")
+            try:
+                self.client.loop_stop(force=True)
+                self.client.disconnect()
+            except Exception:
+                pass
+
+            self.client = mqtt.Client(clean_session=True)
+            if self._MQTT_auth:
+                self.client.username_pw_set(self._MQTT_user, self._MQTT_pass)
+
+            self.client.on_connect = self.on_connect
+            self.client.on_disconnect = self.on_disconnect
+            self.client.on_message = self.on_message
+
+            self.client.connect(self._MQTT_ip, self._MQTT_port, keepalive=60)
+            self.client.subscribe(self._topic + "/Command/#", qos=1)
+            self.client.loop_start()
+
+            self.log("MQTT connected")
         except Exception as e:
-            self.logger.error(f"Error in readPCWU: {e}")
+            self.log(f"MQTT connect failed: {e}")
+            self.log(traceback.format_exc(), level="DEBUG")
 
-    
-    def readPcwuConfig(self):    
-        #self.logger.info(f'readPcwuConfig flag_connected_mqtt: {self.flag_connected_mqtt}')
-        ser = serial.serial_for_url("socket://%s:%s" % (self._Device_Pcwu_Address, self._Device_Pcwu_Port), baudrate=38400, timeout=2)
-        #self.logger.info(f'readPCWUConfig: {ser}')
-        self.dev.readConfigRegisters(ser)
-        ser.close()
-  
-   
-    def printPcwuMqttTopics(self):        
-        print('| Topic | Type | Description | ')
-        print('| ----------------------- | ----------- | ---------------------------')
-        dev = PCWU(self.conHardId, self.conSoftId, self.devHardId, self.devSoftId, on_message_serial)
-        for k, v in dev.registers.items():
-            if isinstance(v['name'] , list):
-                for i in v['name']:
-                    if i:
-                        print('| ' + _Device_Pcwu_MqttTopic + '/' + str(i) + ' | ' + v['type'] + ' | ' + str(v.get('desc')))
+    def on_connect(self, client, userdata, flags, rc):
+        self.dlog(f"MQTT: Connected (rc={rc})")
+
+    def on_disconnect(self, client, userdata, rc):
+        if rc != 0:
+            self.log(f"MQTT disconnected ({rc}), retrying in 5s")
+            t = threading.Timer(5.0, self.start_mqtt)
+            t.daemon = True
+            t.start()
+
+    # ---------------------------------------------------------------
+    # MQTT message handler
+    # ---------------------------------------------------------------
+    def on_message(self, client, userdata, msg):
+        try:
+            payload = msg.payload.decode()
+            topic = msg.topic.split("/")
+            if len(topic) == 3 and topic[0] == self._topic and topic[1] == "Command":
+                reg = topic[2]
+                now = time.time()
+                last_payload, last_ts = self._last_command.get(reg, (None, 0))
+                if last_payload == payload and (now - last_ts) < 10:
+                    self.dlog(f"Command {reg} -> {payload} ignored (duplicate within 10s)")
+                    return
+                if reg in BLOCKED_COMMAND_REGISTERS:
+                    self.dlog(f"Command {reg} ignored (read-only register)")
+                    return
+                self._last_command[reg] = (payload, now)
+                self.log(f"Command {reg} -> {payload}")
+                with self.write_lock:
+                    self.write_queue[reg] = payload
+        except Exception as e:
+            self.log(f"MQTT message error: {e}")
+            self.log(traceback.format_exc(), level="DEBUG")
+
+    # ---------------------------------------------------------------
+    # Write worker (runs in background thread)
+    # ---------------------------------------------------------------
+    def write_worker(self):
+        while not self.write_thread_stop.is_set():
+            try:
+                item = None
+                with self.write_lock:
+                    if self.write_queue:
+                        reg, payload = self.write_queue.popitem()
+                        item = (reg, payload)
+
+                if not item:
+                    time.sleep(0.1)
+                    continue
+
+                reg, payload = item
+                self.writePcwuConfig(reg, payload)
+                time.sleep(0.5)
+
+                with self.write_lock:
+                    queue_empty = not bool(self.write_queue)
+                if queue_empty:
+                    self.readPcwuConfig()
+
+            except Exception as e:
+                self.log(f"Write worker error: {e}")
+                self.log(traceback.format_exc(), level="DEBUG")
+                time.sleep(1.0)
+
+    # ---------------------------------------------------------------
+    # Periodic config-read callback
+    # ---------------------------------------------------------------
+    def readPcwuConfig_cb(self, kwargs):
+        try:
+            if self.writing_active:
+                self.dlog("Config-read skipped: write active")
+                return
+            if not self._rs485_available():
+                self.dlog("Config-read skipped: RS485 temporarily blocked")
+                return
+            self.readPcwuConfig()
+        except Exception as e:
+            self.log(f"Deferred config read error: {e}")
+            self.log(traceback.format_exc(), level="DEBUG")
+
+    # ---------------------------------------------------------------
+    # Serial callback (called by hewalex_geco library)
+    # ---------------------------------------------------------------
+    def on_message_serial(self, obj, h, sh, m):
+        try:
+            if sh["FNC"] == 0x50:
+                mp = obj.parseRegisters(
+                    sh["RestMessage"], sh["RegStart"], sh["RegLen"]
+                )
+                new_values = 0
+                for reg, val in mp.items():
+                    if isinstance(val, dict):
+                        continue
+                    key = f"{self._topic}/{reg}"
+                    val_str = str(val)
+                    if self.MessageCache.get(key) != val_str:
+                        self.MessageCache[key] = val_str
+                        new_values += 1
+                        self.client.publish(key, val_str, retain=True)
+
+                self.last_success = time.time()
+                self.offline_reported = False
+                self.set_state("sensor.hewalex_status", state="online")
+
+                self._last_read_count = len(mp)
+                self._last_new_count = new_values
+
+        except Exception as e:
+            self.log(f"Serial parse error: {e}")
+            self.log(traceback.format_exc(), level="DEBUG")
+
+    # ---------------------------------------------------------------
+    # Polling & watchdog callbacks
+    # ---------------------------------------------------------------
+    def readPCWU_cb(self, kwargs):
+        if self.writing_active:
+            self.dlog("Read skipped: write active")
+            return
+        if time.time() - self.last_write_time < 10:
+            self.dlog("Read skipped: backoff after write")
+            return
+        if not self._rs485_available():
+            self.dlog("Read skipped: RS485 temporarily blocked")
+            return
+
+        time.sleep(random.uniform(0.0, 0.3))
+
+        try:
+            self.readPCWU()
+        except Exception as e:
+            self.log(f"Polling error: {e}")
+            self.log(traceback.format_exc(), level="DEBUG")
+
+    def watchdog_cb(self, kwargs):
+        elapsed = time.time() - self.last_success
+        if elapsed > 300 and not self.offline_reported:
+            self.offline_reported = True
+            self.set_state(
+                "sensor.hewalex_status",
+                state="offline",
+                attributes={"message": "RS485 unreachable >5 min"},
+            )
+            self.log("RS485 gateway unreachable >5 min - reported to HA")
+
+    # ---------------------------------------------------------------
+    # RS485 availability helpers
+    # ---------------------------------------------------------------
+    def _rs485_available(self):
+        return time.time() >= getattr(self, "rs485_block_until", 0)
+
+    def _handle_rs485_hard_error(self, msg):
+        self.rs485_block_until = time.time() + 60
+        self.log(f"RS485 blocked for 60s due to error: {msg}")
+
+    # ---------------------------------------------------------------
+    # Read / write functions
+    # ---------------------------------------------------------------
+    def readPCWU(self):
+        if not self._rs485_available():
+            self.dlog("readPCWU skipped: RS485 temporarily blocked")
+            return
+
+        start = time.perf_counter()
+        try:
+            with self.ser_lock:
+                with serial.serial_for_url(
+                    f"socket://{self._addr}:{self._port}", timeout=5
+                ) as ser:
+                    self.dev.readStatusRegisters(ser)
+                time.sleep(0.25)
+
+            total = getattr(self, "_last_read_count", 0)
+            new = getattr(self, "_last_new_count", 0)
+            duur = time.perf_counter() - start
+            self.log(f"Read OK - {total} registers, {new} changed - {duur:.2f}s")
+
+        except Exception as e:
+            msg = str(e)
+            if any(x in msg for x in SOFT_ERRORS):
+                self.dlog(f"RS485 read (soft error, ignored): {msg}")
+                return
+
+            self.log(f"RS485 read error: {msg}")
+            self.log(traceback.format_exc(), level="DEBUG")
+
+            if any(
+                x in msg
+                for x in [
+                    "disconnected", "Broken", "reset", "timeout",
+                    "filedescriptor out of range", "Could not open port",
+                ]
+            ):
+                self._handle_rs485_hard_error(msg)
+                try:
+                    self.client.loop_stop(force=True)
+                    self.client.disconnect()
+                except Exception:
+                    pass
+                t = threading.Timer(5.0, self.start_mqtt)
+                t.daemon = True
+                t.start()
+
+    def writePcwuConfig(self, reg, payload):
+        """Write register to Hewalex device, with lock and explicit logging."""
+        if not self._rs485_available():
+            self.log(f"Write {reg}={payload} skipped: RS485 temporarily blocked")
+            return
+
+        self.writing_active = True
+        ok = False
+        try:
+            with self.ser_lock:
+                with serial.serial_for_url(
+                    f"socket://{self._addr}:{self._port}",
+                    timeout=5,
+                    write_timeout=5,
+                    inter_byte_timeout=0.5,
+                    rtscts=False,
+                    dsrdtr=False,
+                ) as ser:
+                    dev = PCWU(1, 1, 2, 2, self.on_message_serial)
+                    dev.write(ser, reg, payload)
+                ok = True
+                time.sleep(0.25)
+
+        except Exception as e:
+            msg = str(e)
+            if any(x in msg for x in SOFT_ERRORS):
+                self.dlog(f"Write (soft error, ignored): {msg}")
             else:
-                print('| ' +_Device_Pcwu_MqttTopic + '/' + str(v['name'])+ ' | ' + v['type'] + ' | ' + str(v.get('desc')))
-            if k > dev.REG_CONFIG_START:          
-                print('| ' + _Device_Pcwu_MqttTopic + '/Command/' + str(v['name']) + ' | ' + v.get('type') + ' | ' + str(v.get('desc')))
+                self.log(f"Write error: {msg}")
+                self.log(traceback.format_exc(), level="DEBUG")
 
+            if any(
+                x in msg
+                for x in [
+                    "disconnected", "Broken", "reset", "timeout",
+                    "filedescriptor out of range", "Could not open port",
+                ]
+            ):
+                self._handle_rs485_hard_error(msg)
+                try:
+                    self.client.loop_stop(force=True)
+                    self.client.disconnect()
+                except Exception:
+                    pass
+                t = threading.Timer(5.0, self.start_mqtt)
+                t.daemon = True
+                t.start()
 
+        finally:
+            self.writing_active = False
+            self.last_write_time = time.time()
+            self.log(f"Write {reg}={payload} - {'OK' if ok else 'FAILED'}")
 
-if __name__ == "__main__":
-    # Create an instance of your AppDaemon app
-    app = MyApp()
-    # Initialize the configuration
-    app.initConfiguration()
-    # Start MQTT connection
-    app.start_mqtt()
-    # Add this line to log the MQTT status periodically (e.g., every 60 seconds)
-    app.run_every(app.log_mqtt_status, datetime.datetime.now(), 20)
-    # Run the AppDaemon app
-    app.run()
+    def readPcwuConfig(self):
+        if not self._rs485_available():
+            self.dlog("readPcwuConfig skipped: RS485 temporarily blocked")
+            return
+
+        start = time.perf_counter()
+        try:
+            with self.ser_lock:
+                with serial.serial_for_url(
+                    f"socket://{self._addr}:{self._port}", timeout=5
+                ) as ser:
+                    dev = PCWU(1, 1, 2, 2, self.on_message_serial)
+                    dev.readConfigRegisters(ser)
+                time.sleep(0.25)
+
+            total = getattr(self, "_last_read_count", 0)
+            new = getattr(self, "_last_new_count", 0)
+            duur = time.perf_counter() - start
+            self.log(f"Config-read OK - {total} registers, {new} changed - {duur:.2f}s")
+
+        except Exception as e:
+            msg = str(e)
+            if any(x in msg for x in SOFT_ERRORS):
+                self.dlog(f"Config read (soft error, ignored): {msg}")
+                return
+
+            self.log(f"Config read error: {msg}")
+            self.log(traceback.format_exc(), level="DEBUG")
+
+            if any(
+                x in msg
+                for x in [
+                    "disconnected", "Broken", "reset", "timeout",
+                    "filedescriptor out of range", "Could not open port",
+                ]
+            ):
+                self._handle_rs485_hard_error(msg)
