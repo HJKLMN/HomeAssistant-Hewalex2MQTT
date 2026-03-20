@@ -9,7 +9,7 @@ import datetime
 import random
 import threading
 
-# Versie: 2026-03-20d — paho loop_forever in daemon thread
+# Versie: 2026-03-20e — HeatPumpEnabled via dev.write() zoals Chibald
 
 SOFT_ERRORS = ("Invalid soft message len", "Invalid Const Bytes")
 
@@ -70,37 +70,6 @@ class Hewalex2MQTT(hass.Hass):
             self.client.disconnect()
         except Exception:
             pass
-
-    # ---------------------------------------------------------------
-    # HeatPumpEnabled
-    # ---------------------------------------------------------------
-    def _handle_heatpump_command(self, payload):
-        """Zet de warmtepomp aan of uit via register 304 (enable/disable)."""
-        self.log(f"HeatPumpEnabled command -> {payload}")
-        if not self._rs485_available():
-            self.log("HeatPumpEnabled write overgeslagen: RS485 tijdelijk geblokkeerd")
-            return
-        ok = False
-        try:
-            with self.ser_lock:
-                with serial.serial_for_url(
-                    f"socket://{self._addr}:{self._port}",
-                    timeout=5,
-                    write_timeout=5,
-                ) as ser:
-                    if payload == "True":
-                        self.dev.enable(ser)
-                    else:
-                        self.dev.disable(ser)
-                ok = True
-                time.sleep(0.25)
-        except Exception as e:
-            self.log(f"HeatPumpEnabled write error: {e}")
-            self.log(traceback.format_exc(), level="DEBUG")
-        finally:
-            self.log(f"HeatPumpEnabled -> {payload} — {'geslaagd' if ok else 'mislukt'}")
-        if ok:
-            self.run_in(lambda kwargs: self.readPcwuConfig(), 2)
 
     # ---------------------------------------------------------------
     # Config inlezen
@@ -189,9 +158,11 @@ class Hewalex2MQTT(hass.Hass):
             if len(topic) == 3 and topic[0] == self._topic and topic[1] == "Command":
                 reg = topic[2]
 
-                # HeatPumpEnabled: geen deduplicatie, altijd uitvoeren
+                # HeatPumpEnabled: geen deduplicatie — elke toggle moet doorkomen
                 if reg == "HeatPumpEnabled":
-                    self._handle_heatpump_command(payload)
+                    self.log(f"Command {reg} -> {payload}")
+                    with self.write_lock:
+                        self.write_queue[reg] = payload
                     return
 
                 # Overige registers: deduplicatie binnen 10s
