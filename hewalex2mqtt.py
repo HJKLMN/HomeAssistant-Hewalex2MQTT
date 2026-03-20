@@ -9,13 +9,22 @@ import datetime
 import random
 import threading
 
-VERSION = "2026-03-20g"
+VERSION = "2026-03-20h"
 # HeatPumpEnabled commands via HA listen_state + input_boolean bridge
 # paho on_message unreliable in AppDaemon 4.5.13 for non-retained messages
 
 SOFT_ERRORS = ("Invalid soft message len", "Invalid Const Bytes")
 
 BLOCKED_COMMAND_REGISTERS = frozenset()
+
+# Human-readable translation of WaitingStatus values
+# Published as WaitingStatusText alongside the raw WaitingStatus value
+WAITING_STATUS_TEXT = {
+    "0": "Running",
+    "1": "Ext Off",    # disabled via physical switch
+    "2": "MQTT Off",   # disabled via MQTT command
+    "16": "Defrost",
+}
 
 
 class Hewalex2MQTT(hass.Hass):
@@ -267,6 +276,13 @@ class Hewalex2MQTT(hass.Hass):
                         self.MessageCache[key] = val_str
                         new_values += 1
                         self.client.publish(key, val_str, retain=True)
+
+                        # Publish human-readable text alongside WaitingStatus
+                        if reg == "WaitingStatus":
+                            text = WAITING_STATUS_TEXT.get(val_str, f"Unknown ({val_str})")
+                            text_key = f"{self._topic}/WaitingStatusText"
+                            self.client.publish(text_key, text, retain=True)
+                            self.dlog(f"WaitingStatus {val_str} -> {text}")
 
                 self.last_success = time.time()
                 self.offline_reported = False
