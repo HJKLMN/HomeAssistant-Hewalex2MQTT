@@ -1,40 +1,26 @@
-# Home Assistant MQTT package for Hewalex heat pump
-# Place this file in your /config/packages/ directory and ensure packages are
-# enabled in configuration.yaml:
-#   homeassistant:
-#     packages: !include_dir_named packages
-#
-# Adjust the MQTT topic prefix (default: "Heatpump") to match Device_Pcwu_MqttTopic
-# in your hewalex2mqttconfig.ini.
-
 mqtt:
   switch:
+    # Main on/off switch for the heat pump.
+    # optimistic: true prevents the switch from reverting immediately due to retained MQTT state.
+    # Commands are routed via HA automation → input_boolean → AppDaemon listen_state → RS485.
     - name: "Heat Pump On"
       command_topic: "Heatpump/Command/HeatPumpEnabled"
+      state_topic: "Heatpump/HeatPumpEnabled"
       payload_on: "True"
       payload_off: "False"
-      state_on: "True"
-      state_off: "False"
-      unique_id: heatpump_enabled_switch
-      retain: true
+      optimistic: true
+      unique_id: warmtepomp_aan_switch
       device:
         identifiers:
           - "heatpump_hewalex"
         name: "Hewalex Heat Pump"
 
   sensor:
+
     - name: "Heat Pump T1 Ambient"
       state_topic: "Heatpump/T1"
       unit_of_measurement: "°C"
-      unique_id: "heatpump_t1"
-      device:
-        identifiers:
-          - "heatpump_hewalex"
-        name: "Hewalex Heat Pump"
-
-    - name: "Heat Pump Enabled"
-      state_topic: "Heatpump/HeatPumpEnabled"
-      unique_id: "heatpump_enabled"
+      unique_id: "warmtepomp_t1"
       device:
         identifiers:
           - "heatpump_hewalex"
@@ -43,7 +29,7 @@ mqtt:
     - name: "Heat Pump T2 Floor Out"
       state_topic: "Heatpump/T2"
       unit_of_measurement: "°C"
-      unique_id: "heatpump_t2"
+      unique_id: "warmtepomp_t2"
       device:
         identifiers:
           - "heatpump_hewalex"
@@ -52,16 +38,16 @@ mqtt:
     - name: "Heat Pump T3 Floor In"
       state_topic: "Heatpump/T3"
       unit_of_measurement: "°C"
-      unique_id: "heatpump_t3"
+      unique_id: "warmtepomp_t3"
       device:
         identifiers:
           - "heatpump_hewalex"
         name: "Hewalex Heat Pump"
 
-    - name: "Heat Pump T6 Water Pump In"
+    - name: "Heat Pump T6 Pump In"
       state_topic: "Heatpump/T6"
       unit_of_measurement: "°C"
-      unique_id: "heatpump_t6"
+      unique_id: "warmtepomp_t6"
       device:
         identifiers:
           - "heatpump_hewalex"
@@ -70,7 +56,7 @@ mqtt:
     - name: "Heat Pump T7 Out"
       state_topic: "Heatpump/T7"
       unit_of_measurement: "°C"
-      unique_id: "heatpump_t7"
+      unique_id: "warmtepomp_t7"
       device:
         identifiers:
           - "heatpump_hewalex"
@@ -79,7 +65,7 @@ mqtt:
     - name: "Heat Pump T8 Evaporator"
       state_topic: "Heatpump/T8"
       unit_of_measurement: "°C"
-      unique_id: "heatpump_t8"
+      unique_id: "warmtepomp_t8"
       device:
         identifiers:
           - "heatpump_hewalex"
@@ -88,7 +74,7 @@ mqtt:
     - name: "Heat Pump T9 Before Compressor"
       state_topic: "Heatpump/T9"
       unit_of_measurement: "°C"
-      unique_id: "heatpump_t9"
+      unique_id: "warmtepomp_t9"
       device:
         identifiers:
           - "heatpump_hewalex"
@@ -97,7 +83,7 @@ mqtt:
     - name: "Heat Pump T10 After Compressor"
       state_topic: "Heatpump/T10"
       unit_of_measurement: "°C"
-      unique_id: "heatpump_t10"
+      unique_id: "warmtepomp_t10"
       device:
         identifiers:
           - "heatpump_hewalex"
@@ -106,7 +92,7 @@ mqtt:
     - name: "Heat Pump Target Temperature"
       state_topic: "Heatpump/TapWaterTemp"
       unit_of_measurement: "°C"
-      unique_id: "heatpump_tapwater_temp"
+      unique_id: "warmtepomp_tapwater"
       device:
         identifiers:
           - "heatpump_hewalex"
@@ -115,7 +101,7 @@ mqtt:
     - name: "Heat Pump Hysteresis"
       state_topic: "Heatpump/TapWaterHysteresis"
       unit_of_measurement: "°C"
-      unique_id: "heatpump_hysteresis"
+      unique_id: "warmtepomp_hysteresis"
       device:
         identifiers:
           - "heatpump_hewalex"
@@ -123,8 +109,8 @@ mqtt:
 
     - name: "Heat Pump Expansion Valve"
       state_topic: "Heatpump/EV1"
-      unit_of_measurement: "unit"
-      unique_id: "heatpump_ev1"
+      unit_of_measurement: "steps"
+      unique_id: "warmtepomp_ev1"
       device:
         identifiers:
           - "heatpump_hewalex"
@@ -133,7 +119,7 @@ mqtt:
     - name: "Heat Pump Defrost Interval"
       state_topic: "Heatpump/DefrostingInterval"
       unit_of_measurement: "min"
-      unique_id: "heatpump_defrost_interval"
+      unique_id: "warmtepomp_defrosting_interval"
       device:
         identifiers:
           - "heatpump_hewalex"
@@ -142,7 +128,7 @@ mqtt:
     - name: "Heat Pump Defrost Start Temp"
       state_topic: "Heatpump/DefrostingStartTemp"
       unit_of_measurement: "°C"
-      unique_id: "heatpump_defrost_start"
+      unique_id: "warmtepomp_defrosting_start"
       device:
         identifiers:
           - "heatpump_hewalex"
@@ -151,7 +137,7 @@ mqtt:
     - name: "Heat Pump Defrost Stop Temp"
       state_topic: "Heatpump/DefrostingStopTemp"
       unit_of_measurement: "°C"
-      unique_id: "heatpump_defrost_stop"
+      unique_id: "warmtepomp_defrosting_stop"
       device:
         identifiers:
           - "heatpump_hewalex"
@@ -160,7 +146,7 @@ mqtt:
     - name: "Heat Pump Max Defrost Duration"
       state_topic: "Heatpump/DefrostingMaxTime"
       unit_of_measurement: "min"
-      unique_id: "heatpump_defrost_max_time"
+      unique_id: "warmtepomp_defrosting_max_time"
       device:
         identifiers:
           - "heatpump_hewalex"
@@ -168,16 +154,17 @@ mqtt:
 
     - name: "Heat Pump Waiting Status"
       state_topic: "Heatpump/WaitingStatus"
-      unique_id: "heatpump_waiting_status"
+      unique_id: "warmtepomp_waiting_status"
       device:
         identifiers:
           - "heatpump_hewalex"
         name: "Hewalex Heat Pump"
 
   binary_sensor:
-    - name: "Heat Pump Running"
+
+    - name: "Heat Pump Status"
       state_topic: "Heatpump/HeatPumpEnabled"
-      unique_id: "heatpump_running"
+      unique_id: "warmtepomp_heatpump"
       payload_on: "True"
       payload_off: "False"
       device_class: "running"
@@ -188,7 +175,7 @@ mqtt:
 
     - name: "Heat Pump Circulation Pump"
       state_topic: "Heatpump/CirculationPumpON"
-      unique_id: "heatpump_circulation_pump"
+      unique_id: "warmtepomp_waterpomp"
       payload_on: "True"
       payload_off: "False"
       device_class: "running"
@@ -199,20 +186,20 @@ mqtt:
 
     - name: "Heat Pump Fan"
       state_topic: "Heatpump/FanON"
-      unique_id: "heatpump_fan"
       payload_on: "True"
       payload_off: "False"
+      unique_id: "warmtepomp_fan"
       device_class: "running"
       device:
         identifiers:
           - "heatpump_hewalex"
         name: "Hewalex Heat Pump"
 
-    - name: "Heat Pump Electric Heater"
+    - name: "Heat Pump Heater"
       state_topic: "Heatpump/HeaterEON"
-      unique_id: "heatpump_heater"
       payload_on: "True"
       payload_off: "False"
+      unique_id: "warmtepomp_heater"
       device_class: "running"
       device:
         identifiers:
@@ -221,9 +208,9 @@ mqtt:
 
     - name: "Heat Pump Compressor"
       state_topic: "Heatpump/CompressorON"
-      unique_id: "heatpump_compressor"
       payload_on: "True"
       payload_off: "False"
+      unique_id: "warmtepomp_compressor"
       device_class: "running"
       device:
         identifiers:
@@ -231,13 +218,14 @@ mqtt:
         name: "Hewalex Heat Pump"
 
   climate:
-    - name: "Heat Pump Floor Heating"
-      unique_id: "hewalex_floor_heating"
+    - name: "Heat Pump Floor Temperature"
+      unique_id: "hewalex_vloertemp"
       retain: true
       modes:
         - "heat"
         - "off"
       current_temperature_topic: "Heatpump/T2"
+      temperature_state_topic: "Heatpump/TapWaterTemp"
       temperature_command_topic: "Heatpump/Command/TapWaterTemp"
       initial: 30
       min_temp: 15
@@ -251,14 +239,53 @@ mqtt:
       mode_command_template: "{% if value == 'heat' %}True{% else %}False{% endif %}"
 
     - name: "Heat Pump Hysteresis Control"
-      unique_id: "hewalex_hysteresis_control"
+      unique_id: "hewalex_hysteresis"
       retain: true
       modes:
         - "heat"
+        - "off"
       current_temperature_topic: "Heatpump/TapWaterHysteresis"
+      temperature_state_topic: "Heatpump/TapWaterHysteresis"
       temperature_command_topic: "Heatpump/Command/TapWaterHysteresis"
       initial: 6
       min_temp: 2
       max_temp: 10
       temp_step: 1
       temperature_command_template: "{{ value | int }}"
+
+# ---------------------------------------------------------------
+# Required helper for HeatPumpEnabled command routing.
+# Create this via HA UI: Settings → Helpers → Add → Toggle
+# Name: "Heat Pump Command", Entity ID: input_boolean.warmtepomp_command
+# ---------------------------------------------------------------
+
+# ---------------------------------------------------------------
+# Required automation: mirrors the switch toggle to the input_boolean
+# so AppDaemon can receive it via listen_state (paho on_message is
+# unreliable for non-retained messages in AppDaemon 4.5.x).
+# Create via HA UI or add to your automations.yaml:
+# ---------------------------------------------------------------
+#
+# automation:
+#   - alias: "Heat Pump switch to input_boolean bridge"
+#     trigger:
+#       - platform: state
+#         entity_id: switch.warmtepomp_aan_switch
+#     action:
+#       - choose:
+#           - conditions:
+#               - condition: state
+#                 entity_id: switch.warmtepomp_aan_switch
+#                 state: "on"
+#             sequence:
+#               - service: input_boolean.turn_on
+#                 target:
+#                   entity_id: input_boolean.warmtepomp_command
+#           - conditions:
+#               - condition: state
+#                 entity_id: switch.warmtepomp_aan_switch
+#                 state: "off"
+#             sequence:
+#               - service: input_boolean.turn_off
+#                 target:
+#                   entity_id: input_boolean.warmtepomp_command
