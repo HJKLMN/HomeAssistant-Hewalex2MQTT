@@ -9,7 +9,9 @@ import datetime
 import random
 import threading
 
-# Versie: 2026-03-20e — HeatPumpEnabled via dev.write() zoals Chibald
+VERSION = "2026-03-20g"
+# HeatPumpEnabled commands via HA listen_state + input_boolean bridge
+# paho on_message unreliable in AppDaemon 4.5.13 for non-retained messages
 
 SOFT_ERRORS = ("Invalid soft message len", "Invalid Const Bytes")
 
@@ -17,10 +19,10 @@ BLOCKED_COMMAND_REGISTERS = frozenset()
 
 
 class Hewalex2MQTT(hass.Hass):
-    """Lees Hewalex warmtepomp via RS485 en publiceer naar MQTT + HA-waarschuwing bij uitval."""
+    """Read Hewalex heat pump via RS485, publish to MQTT, alert HA on failure."""
 
     def initialize(self):
-        self.log("Starting Hewalex 2 MQTT")
+        self.log(f"Starting Hewalex 2 MQTT - version {VERSION}")
 
         self.MessageCache = {}
         self.ser_lock = threading.Lock()
@@ -42,12 +44,21 @@ class Hewalex2MQTT(hass.Hass):
         self.dev = PCWU(1, 1, 2, 2, self.on_message_serial)
         self.start_mqtt()
 
-        # write-queue + worker-thread
+        # write-queue + worker thread
         self.write_queue = {}
         self.write_lock = threading.Lock()
         self.write_thread_stop = threading.Event()
         self.write_thread = threading.Thread(target=self.write_worker, daemon=True)
         self.write_thread.start()
+
+        # HeatPumpEnabled commands via listen_state (reliable) instead of paho on_message
+        # Requires an input_boolean.warmtepomp_command helper in HA
+        # and an automation that mirrors switch.warmtepomp_aan_switch to the boolean
+        self.listen_state(
+            self.on_switch_toggle,
+            "input_boolean.warmtepomp_command",
+        )
+        self.log("listen_state registered on input_boolean.warmtepomp_command")
 
         start_poll = self.datetime() + datetime.timedelta(seconds=5)
         start_watchdog = self.datetime() + datetime.timedelta(seconds=60)
@@ -67,12 +78,13 @@ class Hewalex2MQTT(hass.Hass):
         except Exception:
             pass
         try:
+            self.client.loop_stop()
             self.client.disconnect()
         except Exception:
             pass
 
     # ---------------------------------------------------------------
-    # Config inlezen
+    # Configuration
     # ---------------------------------------------------------------
     def initConfiguration(self):
         cfg = configparser.ConfigParser()
@@ -102,7 +114,7 @@ class Hewalex2MQTT(hass.Hass):
             self.log(msg, level="DEBUG")
 
     # ---------------------------------------------------------------
-    # MQTT — loop_forever in eigen daemon thread
+    # MQTT
     # ---------------------------------------------------------------
     def start_mqtt(self):
         with self.mqtt_lock:
@@ -114,6 +126,7 @@ class Hewalex2MQTT(hass.Hass):
 
         try:
             try:
+                self.client.loop_stop()
                 self.client.disconnect()
             except Exception:
                 pass
@@ -126,19 +139,16 @@ class Hewalex2MQTT(hass.Hass):
             self.client.on_disconnect = self.on_disconnect
             self.client.on_message = self.on_message
 
-            self.client.connect(self._MQTT_ip, self._MQTT_port, keepalive=60)
+            self.client.connect_async(self._MQTT_ip, self._MQTT_port, keepalive=60)
+            self.client.loop_start()
 
-            # loop_forever in daemon thread
-            t = threading.Thread(target=self.client.loop_forever, daemon=True)
-            t.start()
-
-            self.log("MQTT connected")
+            self.log("MQTT connecting (async)")
         except Exception as e:
             self.log(f"MQTT connect failed: {e}")
             self.log(traceback.format_exc(), level="DEBUG")
 
     def on_connect(self, client, userdata, flags, rc):
-        self.log("MQTT: on_connect — subscribing")
+        self.log(f"MQTT: on_connect rc={rc} - subscribing")
         client.subscribe(self._topic + "/Command/#", qos=1)
 
     def on_disconnect(self, client, userdata, rc):
@@ -149,7 +159,7 @@ class Hewalex2MQTT(hass.Hass):
             t.start()
 
     # ---------------------------------------------------------------
-    # MQTT Callback
+    # MQTT callback (for config registers; HeatPumpEnabled via listen_state)
     # ---------------------------------------------------------------
     def on_message(self, client, userdata, msg):
         try:
@@ -158,23 +168,21 @@ class Hewalex2MQTT(hass.Hass):
             if len(topic) == 3 and topic[0] == self._topic and topic[1] == "Command":
                 reg = topic[2]
 
-                # HeatPumpEnabled: geen deduplicatie — elke toggle moet doorkomen
+                # HeatPumpEnabled is handled via listen_state - skip here
                 if reg == "HeatPumpEnabled":
-                    self.log(f"Command {reg} -> {payload}")
-                    with self.write_lock:
-                        self.write_queue[reg] = payload
+                    self.dlog(f"on_message: HeatPumpEnabled skipped (handled via listen_state)")
                     return
 
-                # Overige registers: deduplicatie binnen 10s
+                # Other registers: deduplicate within 10s
                 now = time.time()
                 last_payload, last_ts = self._last_command.get(reg, (None, 0))
                 if last_payload == payload and (now - last_ts) < 10:
-                    self.dlog(f"Command {reg} -> {payload} genegeerd (duplicaat binnen 10s)")
+                    self.dlog(f"Command {reg} -> {payload} ignored (duplicate within 10s)")
                     return
                 self._last_command[reg] = (payload, now)
 
                 if reg in BLOCKED_COMMAND_REGISTERS:
-                    self.dlog(f"Command {reg} genegeerd (read-only register)")
+                    self.dlog(f"Command {reg} ignored (read-only register)")
                     return
 
                 self.log(f"Command {reg} -> {payload}")
@@ -185,7 +193,17 @@ class Hewalex2MQTT(hass.Hass):
             self.log(traceback.format_exc(), level="DEBUG")
 
     # ---------------------------------------------------------------
-    # Write-worker
+    # listen_state handler - HeatPumpEnabled via input_boolean
+    # ---------------------------------------------------------------
+    def on_switch_toggle(self, entity, attribute, old, new, kwargs):
+        if new in ("on", "off"):
+            payload = "True" if new == "on" else "False"
+            self.log(f"Switch toggle via listen_state: HeatPumpEnabled -> {payload}")
+            with self.write_lock:
+                self.write_queue["HeatPumpEnabled"] = payload
+
+    # ---------------------------------------------------------------
+    # Write worker
     # ---------------------------------------------------------------
     def write_worker(self):
         while not self.write_thread_stop.is_set():
@@ -215,15 +233,15 @@ class Hewalex2MQTT(hass.Hass):
                 time.sleep(1.0)
 
     # ---------------------------------------------------------------
-    # Config-read callback (periodiek)
+    # Periodic config read callback
     # ---------------------------------------------------------------
     def readPcwuConfig_cb(self, kwargs):
         try:
             if self.writing_active:
-                self.dlog("Config-read overgeslagen: write actief")
+                self.dlog("Config-read skipped: write active")
                 return
             if not self._rs485_available():
-                self.dlog("Config-read overgeslagen: RS485 tijdelijk geblokkeerd")
+                self.dlog("Config-read skipped: RS485 temporarily blocked")
                 return
             self.readPcwuConfig()
         except Exception as e:
@@ -231,7 +249,7 @@ class Hewalex2MQTT(hass.Hass):
             self.log(traceback.format_exc(), level="DEBUG")
 
     # ---------------------------------------------------------------
-    # Seriele callback
+    # Serial callback
     # ---------------------------------------------------------------
     def on_message_serial(self, obj, h, sh, m):
         try:
@@ -265,13 +283,13 @@ class Hewalex2MQTT(hass.Hass):
     # ---------------------------------------------------------------
     def readPCWU_cb(self, kwargs):
         if self.writing_active:
-            self.dlog("Read overgeslagen: write actief")
+            self.dlog("Read skipped: write active")
             return
         if time.time() - self.last_write_time < 10:
-            self.dlog("Read overgeslagen: backoff na write")
+            self.dlog("Read skipped: backoff after write")
             return
         if not self._rs485_available():
-            self.dlog("Read overgeslagen: RS485 tijdelijk geblokkeerd")
+            self.dlog("Read skipped: RS485 temporarily blocked")
             return
         time.sleep(random.uniform(0.0, 0.3))
         try:
@@ -287,26 +305,26 @@ class Hewalex2MQTT(hass.Hass):
             self.set_state(
                 "sensor.hewalex_status",
                 state="offline",
-                attributes={"message": "RS485 onbereikbaar >5 min"},
+                attributes={"message": "RS485 unreachable >5 min"},
             )
-            self.log("RS485-gateway >5 min onbereikbaar — melding aan HA")
+            self.log("RS485 gateway unreachable >5 min - alerting HA")
 
     # ---------------------------------------------------------------
-    # RS485 helper
+    # RS485 helpers
     # ---------------------------------------------------------------
     def _rs485_available(self):
         return time.time() >= getattr(self, "rs485_block_until", 0)
 
     def _handle_rs485_hard_error(self, msg):
         self.rs485_block_until = time.time() + 60
-        self.log(f"RS485 tijdelijk geblokkeerd voor 60s wegens fout: {msg}")
+        self.log(f"RS485 blocked for 60s due to error: {msg}")
 
     # ---------------------------------------------------------------
-    # Lees/schrijf functies met lock
+    # Read/write with lock
     # ---------------------------------------------------------------
     def readPCWU(self):
         if not self._rs485_available():
-            self.dlog("readPCWU overgeslagen: RS485 tijdelijk geblokkeerd")
+            self.dlog("readPCWU skipped: RS485 temporarily blocked")
             return
         start = time.perf_counter()
         try:
@@ -318,14 +336,14 @@ class Hewalex2MQTT(hass.Hass):
                 time.sleep(0.25)
             total = getattr(self, "_last_read_count", 0)
             new = getattr(self, "_last_new_count", 0)
-            duur = time.perf_counter() - start
-            self.log(f"Read OK - {total} gelezen, {new} nieuw - duur {duur:.2f}s")
+            elapsed = time.perf_counter() - start
+            self.log(f"Read OK - {total} registers, {new} new - {elapsed:.2f}s")
         except Exception as e:
             msg = str(e)
             if any(x in msg for x in SOFT_ERRORS):
-                self.dlog(f"Leesfout RS485 (zacht): {msg}")
+                self.dlog(f"RS485 read error (soft): {msg}")
                 return
-            self.log(f"Leesfout RS485: {msg}")
+            self.log(f"RS485 read error: {msg}")
             self.log(traceback.format_exc(), level="DEBUG")
             if any(x in msg for x in ["disconnected", "Broken", "reset", "timeout", "filedescriptor out of range", "Could not open port"]):
                 self._handle_rs485_hard_error(msg)
@@ -334,9 +352,9 @@ class Hewalex2MQTT(hass.Hass):
                 t.start()
 
     def writePcwuConfig(self, reg, payload):
-        """Schrijf register naar Hewalex, met lock, rustpauze en duidelijke logging."""
+        """Write register to Hewalex with lock, rest pause and clear logging."""
         if not self._rs485_available():
-            self.log(f"Write {reg}={payload} overgeslagen: RS485 tijdelijk geblokkeerd")
+            self.log(f"Write {reg}={payload} skipped: RS485 temporarily blocked")
             return
         self.writing_active = True
         ok = False
@@ -357,7 +375,7 @@ class Hewalex2MQTT(hass.Hass):
         except Exception as e:
             msg = str(e)
             if any(x in msg for x in SOFT_ERRORS):
-                self.dlog(f"Write (zachte fout) genegeerd: {msg}")
+                self.dlog(f"Write (soft error) ignored: {msg}")
             else:
                 self.log(f"Write error: {msg}")
                 self.log(traceback.format_exc(), level="DEBUG")
@@ -369,11 +387,11 @@ class Hewalex2MQTT(hass.Hass):
         finally:
             self.writing_active = False
             self.last_write_time = time.time()
-            self.log(f"Write {reg}={payload} - {'geslaagd' if ok else 'mislukt'}")
+            self.log(f"Write {reg}={payload} - {'success' if ok else 'failed'}")
 
     def readPcwuConfig(self):
         if not self._rs485_available():
-            self.dlog("readPcwuConfig overgeslagen: RS485 tijdelijk geblokkeerd")
+            self.dlog("readPcwuConfig skipped: RS485 temporarily blocked")
             return
         start = time.perf_counter()
         try:
@@ -386,12 +404,12 @@ class Hewalex2MQTT(hass.Hass):
                 time.sleep(0.25)
             total = getattr(self, "_last_read_count", 0)
             new = getattr(self, "_last_new_count", 0)
-            duur = time.perf_counter() - start
-            self.log(f"Config-read voltooid - {total} gelezen, {new} nieuw - duur {duur:.2f}s")
+            elapsed = time.perf_counter() - start
+            self.log(f"Config-read done - {total} registers, {new} new - {elapsed:.2f}s")
         except Exception as e:
             msg = str(e)
             if any(x in msg for x in SOFT_ERRORS):
-                self.dlog(f"Config read (zachte fout) genegeerd: {msg}")
+                self.dlog(f"Config read (soft error) ignored: {msg}")
                 return
             self.log(f"Config read error: {msg}")
             self.log(traceback.format_exc(), level="DEBUG")
